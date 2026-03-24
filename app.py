@@ -24,6 +24,7 @@ class DirectoryCompareApp(tk.Tk):
         self.left_dir = tk.StringVar()
         self.right_dir = tk.StringVar()
         self.entries: list[DiffEntry] = []
+        self.entry_by_iid: dict[str, DiffEntry] = {}
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -61,14 +62,14 @@ class DirectoryCompareApp(tk.Tk):
         results_frame = ttk.LabelFrame(main_pane, text="Comparison Results", padding=8)
         main_pane.add(results_frame, weight=3)
 
-        columns = ("type", "status", "path")
-        self.tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=16)
+        columns = ("type", "status")
+        self.tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", height=16)
+        self.tree.heading("#0", text="Relative Path")
         self.tree.heading("type", text="Type")
         self.tree.heading("status", text="Status")
-        self.tree.heading("path", text="Relative Path")
+        self.tree.column("#0", width=800, anchor="w")
         self.tree.column("type", width=90, anchor="center")
         self.tree.column("status", width=110, anchor="center")
-        self.tree.column("path", width=800, anchor="w")
 
         scroll = ttk.Scrollbar(results_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -191,22 +192,52 @@ class DirectoryCompareApp(tk.Tk):
     def _refresh_tree(self) -> None:
         for item in self.tree.get_children():
             self.tree.delete(item)
+        self.entry_by_iid.clear()
 
-        for idx, entry in enumerate(self.entries):
+        path_map = {entry.relative_path: entry for entry in self.entries}
+
+        # Ensure every parent folder path is present so the tree can expand/collapse.
+        for rel_path in list(path_map):
+            if rel_path in (".", ""):
+                continue
+            parent = Path(rel_path).parent
+            while str(parent) not in (".", ""):
+                parent_key = parent.as_posix()
+                if parent_key not in path_map:
+                    path_map[parent_key] = DiffEntry(parent_key, "folder", "same")
+                parent = parent.parent
+
+        def sort_key(item: tuple[str, DiffEntry]) -> tuple[int, str]:
+            rel_path, _entry = item
+            depth = 0 if rel_path == "." else rel_path.count("/") + 1
+            return depth, rel_path
+
+        for rel_path, entry in sorted(path_map.items(), key=sort_key):
+            parent_path = "" if rel_path in (".", "") else Path(rel_path).parent.as_posix()
+            parent_iid = "" if parent_path in (".", "") else parent_path
+            iid = rel_path
+            label = "." if rel_path in (".", "") else Path(rel_path).name
+
             self.tree.insert(
-                "",
+                parent_iid,
                 "end",
-                iid=str(idx),
-                values=(entry.entry_type, entry.status, entry.relative_path),
+                iid=iid,
+                text=label,
+                values=(entry.entry_type, entry.status),
                 tags=(entry.status,),
+                open=(rel_path in (".", "")),
             )
+            self.entry_by_iid[iid] = entry
 
     def show_file_diff(self, _event=None) -> None:
         selected = self.tree.selection()
         if not selected:
             return
 
-        entry = self.entries[int(selected[0])]
+        entry = self.entry_by_iid.get(selected[0])
+        if entry is None:
+            self._set_diff_text("No entry is associated with the selected node.")
+            return
         if entry.entry_type != "file" or entry.status != "changed":
             self._set_diff_text("Select a changed file to view line-by-line diff.")
             return

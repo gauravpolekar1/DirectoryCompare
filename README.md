@@ -3,8 +3,8 @@
 A lightweight **Beyond Compare-like** local tool for Windows that lets you:
 
 - Select two folders.
-- Compare all files and subfolders in a hierarchical tree view.
-- See color-coded status for each node (`same`, `changed`, `left_only`, `right_only`).
+- Compare all files and subfolders.
+- See status for each item (`same`, `changed`, `left_only`, `right_only`).
 - Click a changed text file to view a unified line-by-line diff.
 - Export the full comparison summary to a `.txt` file.
 

@@ -10,8 +10,6 @@ from tkinter import filedialog, messagebox, ttk
 @dataclass
 class DiffEntry:
     relative_path: str
-    name: str
-    parent_path: str | None
     entry_type: str  # "file" | "folder"
     status: str      # "same" | "changed" | "left_only" | "right_only"
 
@@ -20,13 +18,12 @@ class DirectoryCompareApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Directory Compare (Beyond Compare style)")
-        self.geometry("1220x780")
-        self.minsize(1000, 660)
+        self.geometry("1200x760")
+        self.minsize(980, 640)
 
         self.left_dir = tk.StringVar()
         self.right_dir = tk.StringVar()
-        self.entries_by_path: dict[str, DiffEntry] = {}
-        self.tree_iid_to_path: dict[str, str] = {}
+        self.entries: list[DiffEntry] = []
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -50,8 +47,6 @@ class DirectoryCompareApp(tk.Tk):
         action_row.pack(fill=tk.X, pady=(10, 8))
 
         ttk.Button(action_row, text="Compare", command=self.compare_directories).pack(side=tk.LEFT)
-        ttk.Button(action_row, text="Expand All", command=self.expand_all).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(action_row, text="Collapse All", command=self.collapse_all).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(action_row, text="Export Summary", command=self.export_summary).pack(side=tk.LEFT, padx=8)
 
         legend = ttk.Label(
@@ -63,30 +58,23 @@ class DirectoryCompareApp(tk.Tk):
         main_pane = ttk.PanedWindow(root, orient=tk.VERTICAL)
         main_pane.pack(fill=tk.BOTH, expand=True)
 
-        results_frame = ttk.LabelFrame(main_pane, text="Tree Comparison", padding=8)
+        results_frame = ttk.LabelFrame(main_pane, text="Comparison Results", padding=8)
         main_pane.add(results_frame, weight=3)
 
-        columns = ("type", "status", "relative_path")
-        self.tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", height=16)
-        self.tree.heading("#0", text="Name")
+        columns = ("type", "status", "path")
+        self.tree = ttk.Treeview(results_frame, columns=columns, show="headings", height=16)
         self.tree.heading("type", text="Type")
         self.tree.heading("status", text="Status")
-        self.tree.heading("relative_path", text="Relative Path")
-        self.tree.column("#0", width=380, anchor="w")
-        self.tree.column("type", width=100, anchor="center")
+        self.tree.heading("path", text="Relative Path")
+        self.tree.column("type", width=90, anchor="center")
         self.tree.column("status", width=110, anchor="center")
-        self.tree.column("relative_path", width=620, anchor="w")
+        self.tree.column("path", width=800, anchor="w")
 
-        scroll_y = ttk.Scrollbar(results_frame, orient="vertical", command=self.tree.yview)
-        scroll_x = ttk.Scrollbar(results_frame, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        scroll = ttk.Scrollbar(results_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
 
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        scroll_y.grid(row=0, column=1, sticky="ns")
-        scroll_x.grid(row=1, column=0, sticky="ew")
-
-        results_frame.columnconfigure(0, weight=1)
-        results_frame.rowconfigure(0, weight=1)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.tree.tag_configure("same", foreground="#157f1f")
         self.tree.tag_configure("changed", foreground="#a35a00")
@@ -95,7 +83,7 @@ class DirectoryCompareApp(tk.Tk):
 
         self.tree.bind("<<TreeviewSelect>>", self.show_file_diff)
 
-        diff_frame = ttk.LabelFrame(main_pane, text="File Diff (select a changed file)", padding=8)
+        diff_frame = ttk.LabelFrame(main_pane, text="File Diff (for selected changed file)", padding=8)
         main_pane.add(diff_frame, weight=2)
 
         self.diff_text = tk.Text(diff_frame, wrap="none", font=("Consolas", 10))
@@ -123,17 +111,19 @@ class DirectoryCompareApp(tk.Tk):
 
     @staticmethod
     def _collect_entries(root: Path) -> dict[str, str]:
-        """Return map: relative path -> 'file'/'folder' (without '.' root node)."""
+        """Return map: relative path -> 'file'/'folder'."""
         mapping: dict[str, str] = {}
         for dirpath, dirnames, filenames in os.walk(root):
             current = Path(dirpath)
             rel_dir = current.relative_to(root)
-            if str(rel_dir) != ".":
-                mapping[rel_dir.as_posix()] = "folder"
+            rel_dir_str = "." if str(rel_dir) == "." else rel_dir.as_posix()
+            mapping[rel_dir_str] = "folder"
             for name in dirnames:
-                mapping[(rel_dir / name).as_posix()] = "folder"
+                rel = (rel_dir / name).as_posix()
+                mapping[rel] = "folder"
             for name in filenames:
-                mapping[(rel_dir / name).as_posix()] = "file"
+                rel = (rel_dir / name).as_posix()
+                mapping[rel] = "file"
         return mapping
 
     @staticmethod
@@ -143,11 +133,6 @@ class DirectoryCompareApp(tk.Tk):
             while chunk := f.read(1024 * 1024):
                 hasher.update(chunk)
         return hasher.hexdigest()
-
-    @staticmethod
-    def _parent_path(rel_path: str) -> str | None:
-        parent = Path(rel_path).parent.as_posix()
-        return None if parent == "." else parent
 
     def compare_directories(self) -> None:
         left = Path(self.left_dir.get()).expanduser()
@@ -160,127 +145,68 @@ class DirectoryCompareApp(tk.Tk):
         left_map = self._collect_entries(left)
         right_map = self._collect_entries(right)
 
-        all_paths = sorted(set(left_map) | set(right_map), key=lambda p: (p.count("/"), p.lower()))
-        built: dict[str, DiffEntry] = {}
+        all_paths = sorted(set(left_map) | set(right_map))
+        result: list[DiffEntry] = []
 
         for rel_path in all_paths:
             left_type = left_map.get(rel_path)
             right_type = right_map.get(rel_path)
 
             if left_type and not right_type:
-                entry_type = left_type
-                status = "left_only"
-            elif right_type and not left_type:
-                entry_type = right_type
-                status = "right_only"
-            else:
-                assert left_type is not None and right_type is not None
-                if left_type != right_type:
-                    entry_type = "file"
-                    status = "changed"
-                elif left_type == "folder":
-                    entry_type = "folder"
-                    status = "same"
-                else:
-                    entry_type = "file"
-                    try:
-                        status = "same" if self._file_hash(left / rel_path) == self._file_hash(right / rel_path) else "changed"
-                    except OSError:
-                        status = "changed"
+                result.append(DiffEntry(rel_path, left_type, "left_only"))
+                continue
+            if right_type and not left_type:
+                result.append(DiffEntry(rel_path, right_type, "right_only"))
+                continue
 
-            built[rel_path] = DiffEntry(
-                relative_path=rel_path,
-                name=Path(rel_path).name,
-                parent_path=self._parent_path(rel_path),
-                entry_type=entry_type,
-                status=status,
-            )
+            assert left_type is not None and right_type is not None
 
-        self.entries_by_path = built
-        self._propagate_folder_statuses()
+            if left_type != right_type:
+                result.append(DiffEntry(rel_path, "file", "changed"))
+                continue
+
+            if left_type == "folder":
+                result.append(DiffEntry(rel_path, "folder", "same"))
+                continue
+
+            left_file = left / rel_path
+            right_file = right / rel_path
+            try:
+                status = "same" if self._file_hash(left_file) == self._file_hash(right_file) else "changed"
+            except OSError:
+                status = "changed"
+            result.append(DiffEntry(rel_path, "file", status))
+
+        self.entries = result
         self._refresh_tree()
-
-        changed_count = sum(1 for x in self.entries_by_path.values() if x.status == "changed")
-        left_only_count = sum(1 for x in self.entries_by_path.values() if x.status == "left_only")
-        right_only_count = sum(1 for x in self.entries_by_path.values() if x.status == "right_only")
-        self._set_diff_text(
-            f"Total entries: {len(self.entries_by_path)} | changed: {changed_count} | "
+        changed_count = sum(1 for x in result if x.status == "changed")
+        left_only_count = sum(1 for x in result if x.status == "left_only")
+        right_only_count = sum(1 for x in result if x.status == "right_only")
+        summary = (
+            f"Total entries: {len(result)} | changed: {changed_count} | "
             f"left_only: {left_only_count} | right_only: {right_only_count}"
         )
-
-    def _propagate_folder_statuses(self) -> None:
-        children: dict[str | None, list[str]] = {}
-        for path, entry in self.entries_by_path.items():
-            children.setdefault(entry.parent_path, []).append(path)
-
-        folder_paths = sorted(
-            (p for p, e in self.entries_by_path.items() if e.entry_type == "folder"),
-            key=lambda p: p.count("/"),
-            reverse=True,
-        )
-
-        for folder_path in folder_paths:
-            folder = self.entries_by_path[folder_path]
-            child_statuses = {self.entries_by_path[ch].status for ch in children.get(folder_path, [])}
-            if not child_statuses:
-                continue
-            if "left_only" in child_statuses and "right_only" in child_statuses:
-                folder.status = "changed"
-            elif "left_only" in child_statuses:
-                folder.status = "left_only" if child_statuses <= {"left_only"} else "changed"
-            elif "right_only" in child_statuses:
-                folder.status = "right_only" if child_statuses <= {"right_only"} else "changed"
-            elif "changed" in child_statuses:
-                folder.status = "changed"
-            else:
-                folder.status = "same"
+        self._set_diff_text(summary)
 
     def _refresh_tree(self) -> None:
         for item in self.tree.get_children():
             self.tree.delete(item)
-        self.tree_iid_to_path.clear()
 
-        sorted_entries = sorted(self.entries_by_path.values(), key=lambda e: (e.relative_path.count("/"), e.relative_path.lower()))
-        iid_for_path: dict[str, str] = {}
-
-        for entry in sorted_entries:
-            parent_iid = iid_for_path.get(entry.parent_path or "")
-            iid = entry.relative_path
-            iid_for_path[entry.relative_path] = iid
-            self.tree_iid_to_path[iid] = entry.relative_path
+        for idx, entry in enumerate(self.entries):
             self.tree.insert(
-                parent_iid if parent_iid else "",
+                "",
                 "end",
-                iid=iid,
-                text=entry.name,
+                iid=str(idx),
                 values=(entry.entry_type, entry.status, entry.relative_path),
                 tags=(entry.status,),
-                open=False,
             )
-
-    def expand_all(self) -> None:
-        for iid in self.tree.get_children(""):
-            self._set_open_recursive(iid, True)
-
-    def collapse_all(self) -> None:
-        for iid in self.tree.get_children(""):
-            self._set_open_recursive(iid, False)
-
-    def _set_open_recursive(self, iid: str, open_state: bool) -> None:
-        self.tree.item(iid, open=open_state)
-        for child in self.tree.get_children(iid):
-            self._set_open_recursive(child, open_state)
 
     def show_file_diff(self, _event=None) -> None:
         selected = self.tree.selection()
         if not selected:
             return
 
-        rel_path = self.tree_iid_to_path.get(selected[0])
-        if not rel_path:
-            return
-        entry = self.entries_by_path[rel_path]
-
+        entry = self.entries[int(selected[0])]
         if entry.entry_type != "file" or entry.status != "changed":
             self._set_diff_text("Select a changed file to view line-by-line diff.")
             return
@@ -292,7 +218,9 @@ class DirectoryCompareApp(tk.Tk):
         right_text = self._safe_read_text(right_file)
 
         if left_text is None or right_text is None:
-            self._set_diff_text("Unable to show textual diff (likely binary file or decode issue).")
+            self._set_diff_text(
+                "Unable to show textual diff (likely binary file or decode issue)."
+            )
             return
 
         diff = difflib.unified_diff(
@@ -302,7 +230,8 @@ class DirectoryCompareApp(tk.Tk):
             tofile=f"right/{entry.relative_path}",
             lineterm="",
         )
-        self._set_diff_text("\n".join(diff) or "Files differ by encoding/metadata or newline style.")
+        diff_content = "\n".join(diff) or "Files differ by encoding/metadata or newline style."
+        self._set_diff_text(diff_content)
 
     @staticmethod
     def _safe_read_text(path: Path) -> str | None:
@@ -310,8 +239,10 @@ class DirectoryCompareApp(tk.Tk):
             raw = path.read_bytes()
         except OSError:
             return None
+
         if b"\x00" in raw:
             return None
+
         for encoding in ("utf-8", "utf-16", "cp1252", "latin-1"):
             try:
                 return raw.decode(encoding)
@@ -326,7 +257,7 @@ class DirectoryCompareApp(tk.Tk):
         self.diff_text.configure(state=tk.DISABLED)
 
     def export_summary(self) -> None:
-        if not self.entries_by_path:
+        if not self.entries:
             messagebox.showinfo("Nothing to export", "Run a comparison first.")
             return
 
@@ -339,13 +270,11 @@ class DirectoryCompareApp(tk.Tk):
         if not save_path:
             return
 
-        rows = ["Type\tStatus\tRelative Path"]
-        for rel_path in sorted(self.entries_by_path):
-            e = self.entries_by_path[rel_path]
-            rows.append(f"{e.entry_type}\t{e.status}\t{e.relative_path}")
+        lines = ["Type\tStatus\tRelative Path"]
+        lines.extend(f"{e.entry_type}\t{e.status}\t{e.relative_path}" for e in self.entries)
 
         try:
-            Path(save_path).write_text("\n".join(rows), encoding="utf-8")
+            Path(save_path).write_text("\n".join(lines), encoding="utf-8")
         except OSError as exc:
             messagebox.showerror("Save failed", f"Could not save file:\n{exc}")
             return

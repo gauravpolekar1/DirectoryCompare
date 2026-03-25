@@ -89,6 +89,12 @@ class DirectoryCompareApp(tk.Tk):
 
         self.diff_text = tk.Text(diff_frame, wrap="none", font=("Consolas", 10))
         self.diff_text.configure(state=tk.DISABLED)
+        self.diff_text.tag_configure("diff_header", foreground="#8a8a8a")
+        self.diff_text.tag_configure("diff_hunk", foreground="#2d5bd1")
+        self.diff_text.tag_configure("diff_add", foreground="#1b7f3a")
+        self.diff_text.tag_configure("diff_remove", foreground="#b42318")
+        self.diff_text.tag_configure("diff_meta", foreground="#7a3e9d")
+
         diff_v = ttk.Scrollbar(diff_frame, orient="vertical", command=self.diff_text.yview)
         diff_h = ttk.Scrollbar(diff_frame, orient="horizontal", command=self.diff_text.xview)
         self.diff_text.configure(yscrollcommand=diff_v.set, xscrollcommand=diff_h.set)
@@ -257,12 +263,17 @@ class DirectoryCompareApp(tk.Tk):
         diff = difflib.unified_diff(
             left_text.splitlines(),
             right_text.splitlines(),
-            fromfile=f"left/{entry.relative_path}",
-            tofile=f"right/{entry.relative_path}",
+            fromfile=f"a/{entry.relative_path}",
+            tofile=f"b/{entry.relative_path}",
             lineterm="",
         )
-        diff_content = "\n".join(diff) or "Files differ by encoding/metadata or newline style."
-        self._set_diff_text(diff_content)
+        diff_lines = list(diff)
+        if not diff_lines:
+            self._set_diff_text("Files differ by encoding/metadata or newline style.")
+            return
+
+        git_style_lines = [f"diff --git a/{entry.relative_path} b/{entry.relative_path}", *diff_lines]
+        self._set_diff_lines(git_style_lines)
 
     @staticmethod
     def _safe_read_text(path: Path) -> str | None:
@@ -285,6 +296,25 @@ class DirectoryCompareApp(tk.Tk):
         self.diff_text.configure(state=tk.NORMAL)
         self.diff_text.delete("1.0", tk.END)
         self.diff_text.insert(tk.END, content)
+        self.diff_text.configure(state=tk.DISABLED)
+
+    def _set_diff_lines(self, lines: list[str]) -> None:
+        self.diff_text.configure(state=tk.NORMAL)
+        self.diff_text.delete("1.0", tk.END)
+        for line in lines:
+            tag = None
+            if line.startswith("diff --git") or line.startswith("index "):
+                tag = "diff_meta"
+            elif line.startswith("@@"):
+                tag = "diff_hunk"
+            elif line.startswith("+++ ") or line.startswith("--- "):
+                tag = "diff_header"
+            elif line.startswith("+") and not line.startswith("+++"):
+                tag = "diff_add"
+            elif line.startswith("-") and not line.startswith("---"):
+                tag = "diff_remove"
+
+            self.diff_text.insert(tk.END, f"{line}\n", tag)
         self.diff_text.configure(state=tk.DISABLED)
 
     def export_summary(self) -> None:
